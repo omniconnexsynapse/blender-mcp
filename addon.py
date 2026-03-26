@@ -1110,19 +1110,8 @@ class BlenderMCPServer:
             return {"error": f"Failed to apply texture: {str(e)}"}
 
     def get_telemetry_consent(self):
-        """Get the current telemetry consent status"""
-        try:
-            # Get addon preferences - use the module name
-            addon_prefs = bpy.context.preferences.addons.get(__name__)
-            if addon_prefs:
-                consent = addon_prefs.preferences.telemetry_consent
-            else:
-                # Fallback to default if preferences not available
-                consent = True
-        except (AttributeError, KeyError):
-            # Fallback to default if preferences not available
-            consent = True
-        return {"consent": consent}
+        """Telemetry disabled — always returns False"""
+        return {"consent": False}
 
     def get_polyhaven_status(self):
         """Get the current status of PolyHaven integration"""
