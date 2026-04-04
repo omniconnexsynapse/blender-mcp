@@ -208,7 +208,6 @@ class BlenderMCPServer:
             "get_object_info": self.get_object_info,
             "get_viewport_screenshot": self.get_viewport_screenshot,
             "execute_code": self.execute_code,
-            "get_telemetry_consent": self.get_telemetry_consent,
             "get_polyhaven_status": self.get_polyhaven_status,
             "get_hyper3d_status": self.get_hyper3d_status,
             "get_sketchfab_status": self.get_sketchfab_status,
@@ -1109,9 +1108,6 @@ class BlenderMCPServer:
             traceback.print_exc()
             return {"error": f"Failed to apply texture: {str(e)}"}
 
-    def get_telemetry_consent(self):
-        """Telemetry disabled — always returns False"""
-        return {"consent": False}
 
     def get_polyhaven_status(self):
         """Get the current status of PolyHaven integration"""
@@ -2257,8 +2253,21 @@ class BlenderMCPServer:
                 for chunk in zip_response.iter_content(chunk_size=8192):
                     f.write(chunk)
 
-            # Unzip the ZIP
+            # Unzip the ZIP with path traversal protection
             with zipfile.ZipFile(zip_file_path, "r") as zip_ref:
+                for file_info in zip_ref.infolist():
+                    file_path = file_info.filename
+                    target_path = os.path.join(temp_dir, os.path.normpath(file_path))
+                    abs_temp_dir = os.path.abspath(temp_dir)
+                    abs_target_path = os.path.abspath(target_path)
+                    if not abs_target_path.startswith(abs_temp_dir):
+                        with suppress(Exception):
+                            shutil.rmtree(temp_dir)
+                        return {"error": "Security issue: Zip contains files with path traversal attempt"}
+                    if ".." in file_path:
+                        with suppress(Exception):
+                            shutil.rmtree(temp_dir)
+                        return {"error": "Security issue: Zip contains files with directory traversal sequence"}
                 zip_ref.extractall(temp_dir)
 
             # Find the .obj file (there may be multiple, assuming the main file is model.obj)
@@ -2313,33 +2322,13 @@ class BlenderMCPServer:
 class BLENDERMCP_AddonPreferences(bpy.types.AddonPreferences):
     bl_idname = __name__
     
-    telemetry_consent: BoolProperty(
-        name="Allow Telemetry",
-        description="Allow collection of prompts, code snippets, and screenshots to help improve Blender MCP",
-        default=True
-    )
-
     def draw(self, context):
         layout = self.layout
-        
-        # Telemetry section
-        layout.label(text="Telemetry & Privacy:", icon='PREFERENCES')
-        
+
+        # Privacy notice
+        layout.label(text="Privacy:", icon='PREFERENCES')
         box = layout.box()
-        row = box.row()
-        row.prop(self, "telemetry_consent", text="Allow Telemetry")
-        
-        # Info text
-        box.separator()
-        if self.telemetry_consent:
-            box.label(text="With consent: We collect anonymized prompts, code, and screenshots.", icon='INFO')
-        else:
-            box.label(text="Without consent: We only collect minimal anonymous usage data", icon='INFO')
-            box.label(text="(tool names, success/failure, duration - no prompts or code).", icon='BLANK1')
-        box.separator()
-        box.label(text="All data is fully anonymized. You can change this anytime.", icon='CHECKMARK')
-        
-        # Terms and Conditions link
+        box.label(text="Telemetry permanently removed. No data is collected.", icon='CHECKMARK')
         box.separator()
         row = box.row()
         row.operator("blendermcp.open_terms", text="View Terms and Conditions", icon='TEXT')
