@@ -278,41 +278,75 @@ def get_object_info(ctx: Context, object_name: str) -> str:
 def get_viewport_screenshot(ctx: Context, max_size: int = 800) -> Image:
     """
     Capture a screenshot of the current Blender 3D viewport.
-    
+
     Parameters:
     - max_size: Maximum size in pixels for the largest dimension (default: 800)
-    
+
     Returns the screenshot as an Image.
+    Auto-scales large screenshots to stay under 18MB for reliable transfer.
     """
+    MAX_IMAGE_BYTES = 18 * 1024 * 1024  # 18MB safe limit
+    temp_path = None
     try:
         blender = get_blender_connection()
-        
+
         # Create temp file path
         temp_dir = tempfile.gettempdir()
         temp_path = os.path.join(temp_dir, f"blender_screenshot_{os.getpid()}.png")
-        
+
         result = blender.send_command("get_viewport_screenshot", {
             "max_size": max_size,
             "filepath": temp_path,
             "format": "png"
         })
-        
+
         if "error" in result:
             raise Exception(result["error"])
-        
+
         if not os.path.exists(temp_path):
             raise Exception("Screenshot file was not created")
-        
-        # Read the file
-        with open(temp_path, 'rb') as f:
-            image_bytes = f.read()
-        
-        # Delete the temp file
+
+        file_size = os.path.getsize(temp_path)
+        logger.info(f"Blender screenshot captured: {file_size / (1024*1024):.1f}MB")
+
+        if file_size <= MAX_IMAGE_BYTES:
+            with open(temp_path, 'rb') as f:
+                image_bytes = f.read()
+            os.remove(temp_path)
+            return Image(data=image_bytes, format="png")
+
+        # Image too large — scale down with Pillow
+        from PIL import Image as PILImage
+        import io
+
+        logger.info(f"Blender screenshot exceeds {MAX_IMAGE_BYTES // (1024*1024)}MB, scaling down...")
+        img = PILImage.open(temp_path)
         os.remove(temp_path)
-        
-        return Image(data=image_bytes, format="png")
-        
+        temp_path = None
+        orig_w, orig_h = img.size
+        scale = 0.75
+
+        while scale > 0.1:
+            new_w = int(orig_w * scale)
+            new_h = int(orig_h * scale)
+            resized = img.resize((new_w, new_h), PILImage.LANCZOS)
+            buf = io.BytesIO()
+            resized.save(buf, format='PNG', optimize=True)
+            png_bytes = buf.getvalue()
+            logger.info(f"  Scaled to {new_w}x{new_h}: {len(png_bytes) / (1024*1024):.1f}MB")
+            if len(png_bytes) <= MAX_IMAGE_BYTES:
+                return Image(data=png_bytes, format="png")
+            scale -= 0.1
+
+        # Last resort: JPEG at 50% scale
+        buf = io.BytesIO()
+        resized = img.resize((int(orig_w * 0.5), int(orig_h * 0.5)), PILImage.LANCZOS)
+        resized.save(buf, format='JPEG', quality=85)
+        return Image(data=buf.getvalue(), format="jpeg")
+
     except Exception as e:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
         logger.error(f"Error capturing screenshot: {str(e)}")
         raise Exception(f"Screenshot failed: {str(e)}")
 
