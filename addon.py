@@ -30,7 +30,11 @@ bl_info = {
     "category": "Interface",
 }
 
-RODIN_FREE_TRIAL_KEY = "k9TcfFoEhNd9cCPP2guHAHHHkctZHIRhZDywZ1euGUXwihbYLpOjQhofby80NJez"
+# Hyper3D Rodin API key — read from environment to avoid committing the shared
+# free-trial token (anyone with repo access could abuse the quota otherwise).
+# Set RODIN_FREE_TRIAL_KEY in your shell/addon config before using the
+# Hyper3D free-trial mode. Empty string means "free-trial features disabled."
+RODIN_FREE_TRIAL_KEY = os.environ.get("RODIN_FREE_TRIAL_KEY", "")
 
 # Add User-Agent as required by Poly Haven API
 REQ_HEADERS = requests.utils.default_headers()
@@ -746,12 +750,33 @@ class BlenderMCPServer:
 
                         # Check for included files and download them
                         if "include" in file_info and file_info["include"]:
+                            # Resolve temp_dir once so we can compare every
+                            # include path against it. abspath + normpath
+                            # canonicalizes both sides; commonpath fails with
+                            # ValueError if the paths don't share a root
+                            # (cross-drive, etc) which we treat as a reject.
+                            safe_base = os.path.abspath(os.path.normpath(temp_dir))
                             for include_path, include_info in file_info["include"].items():
                                 # Get the URL for the included file - this is the fix
                                 include_url = include_info["url"]
 
-                                # Create the directory structure for the included file
-                                include_file_path = os.path.join(temp_dir, include_path)
+                                # Path-traversal defense: the Polyhaven API
+                                # response drives include_path values, which
+                                # are not fully trusted (MITM + compromised
+                                # upstream). Reject any include_path that
+                                # escapes temp_dir after normalization — same
+                                # pattern as the zip-slip defense applied
+                                # elsewhere on actual zip extraction.
+                                candidate = os.path.abspath(os.path.normpath(os.path.join(safe_base, include_path)))
+                                try:
+                                    common = os.path.commonpath([safe_base, candidate])
+                                except ValueError:
+                                    common = ""
+                                if common != safe_base:
+                                    print(f"REJECTED include_path (path traversal): {include_path!r} resolved to {candidate!r} which escapes {safe_base!r}")
+                                    continue
+
+                                include_file_path = candidate
                                 os.makedirs(os.path.dirname(include_file_path), exist_ok=True)
 
                                 # Download the included file
