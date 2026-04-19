@@ -389,9 +389,19 @@ class BlenderMCPServer:
             if not area:
                 return {"error": "No 3D viewport found"}
 
-            # Take screenshot with proper context override
-            with bpy.context.temp_override(area=area):
-                bpy.ops.screen.screenshot_area(filepath=filepath)
+            # Take screenshot with proper context override.
+            # bpy.context.temp_override() was added in Blender 4.0; pre-4.0 used
+            # the override-dict pattern (passing a context dict as the first
+            # positional arg to bpy.ops). Addon declares Blender 3.0+ compat in
+            # bl_info so we need both paths here — without the guard, Blender
+            # 3.6 LTS (still widely used) would AttributeError on this line.
+            if hasattr(bpy.context, 'temp_override'):
+                with bpy.context.temp_override(area=area):
+                    bpy.ops.screen.screenshot_area(filepath=filepath)
+            else:
+                # Blender 3.x fallback: dict-override form
+                override = {'area': area}
+                bpy.ops.screen.screenshot_area(override, filepath=filepath)
 
             # Load and resize if needed
             img = bpy.data.images.load(filepath)

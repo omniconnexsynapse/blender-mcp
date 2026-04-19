@@ -23,6 +23,23 @@ logger = logging.getLogger("BlenderMCPServer")
 DEFAULT_HOST = "localhost"
 DEFAULT_PORT = 9876
 
+# Allow-list for URL schemes accepted from AI image inputs. Without this, a
+# malicious or hallucinated URL like `file:///etc/passwd` or `ftp://evil/`
+# could be forwarded to requests.get() inside the Blender addon (addon.py
+# requests the URL directly when fetching user-supplied input images for
+# Hyper3D / Hunyuan3D). http/https is the only reasonable scheme for
+# remote-hosted input images.
+_ALLOWED_IMAGE_URL_SCHEMES = ("http", "https")
+
+
+def _validate_image_url(url: str) -> bool:
+    """Return True iff the URL parses cleanly and uses an http(s) scheme."""
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    return parsed.scheme in _ALLOWED_IMAGE_URL_SCHEMES and bool(parsed.netloc)
+
 @dataclass
 class BlenderConnection:
     host: str
@@ -308,6 +325,20 @@ def get_viewport_screenshot(ctx: Context, max_size: int = 800) -> Image:
 
         file_size = os.path.getsize(temp_path)
         logger.info(f"Blender screenshot captured: {file_size / (1024*1024):.1f}MB")
+
+        # Pre-check before PIL loads the PNG into memory: if the file is
+        # pathologically large (e.g. 32K x 32K viewport render), PIL would
+        # allocate hundreds of MB just to scale it down. Bound the input before
+        # we try — 500MB on-disk PNG is already extreme; anything past that is
+        # almost certainly a misconfiguration or an attack (attacker-controlled
+        # max_size bypass) rather than a legitimate screenshot we want to scale.
+        MAX_SOURCE_FILE_BYTES = 500 * 1024 * 1024
+        if file_size > MAX_SOURCE_FILE_BYTES:
+            os.remove(temp_path)
+            raise Exception(
+                f"Screenshot source file too large ({file_size / (1024*1024):.0f}MB); "
+                f"refuse to PIL-load — check viewport resolution / max_size param"
+            )
 
         if file_size <= MAX_IMAGE_BYTES:
             with open(temp_path, 'rb') as f:
@@ -885,8 +916,14 @@ def generate_hyper3d_model_via_images(
                     (Path(path).suffix, base64.b64encode(f.read()).decode("ascii"))
                 )
     elif input_image_urls is not None:
-        if not all(urlparse(i) for i in input_image_paths):
-            return "Error: not all image URLs are valid!"
+        # Bug fix: previous code iterated input_image_paths (wrong variable) and
+        # used bare urlparse() which always returns truthy — the check was a
+        # no-op. Now: iterate the actual URL list AND enforce http(s) scheme so
+        # a malicious file://, ftp://, gopher:// URL can't be forwarded to the
+        # addon's requests.get() path.
+        bad = [u for u in input_image_urls if not _validate_image_url(u)]
+        if bad:
+            return f"Error: rejected image URL(s) (must be http/https with host): {bad!r}"
         images = input_image_urls.copy()
     try:
         blender = get_blender_connection()
@@ -1020,6 +1057,12 @@ def generate_hunyuan3d_model(
     - When the job completes, the status will change to "DONE" indicating the model has been imported
     - Returns error message if the operation fails
     """
+    # URL scheme allow-list: prevents forwarding file:// / ftp:// / etc. to the
+    # addon's requests.get() fetch path. input_image_url is optional (text-only
+    # generation is allowed), so we only validate when it's actually supplied.
+    if input_image_url is not None and not _validate_image_url(input_image_url):
+        return f"Error: rejected input_image_url (must be http/https with host): {input_image_url!r}"
+
     try:
         blender = get_blender_connection()
         result = blender.send_command("create_hunyuan_job", {
