@@ -717,9 +717,7 @@ def search_sketchfab_models(
         
         return formatted_output
     except Exception as e:
-        logger.error(f"Error searching Sketchfab models: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
+        logger.exception("Error searching Sketchfab models")
         return f"Error searching Sketchfab models: {str(e)}"
 
 @mcp.tool()
@@ -832,9 +830,7 @@ def download_sketchfab_model(
         else:
             return f"Failed to download model: {result.get('message', 'Unknown error')}"
     except Exception as e:
-        logger.error(f"Error downloading Sketchfab model: {str(e)}")
-        import traceback
-        logger.error(traceback.format_exc())
+        logger.exception("Error downloading Sketchfab model")
         return f"Error downloading Sketchfab model: {str(e)}"
 
 def _process_bbox(original_bbox: list[float] | list[int] | None) -> list[int] | None:
